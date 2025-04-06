@@ -2,27 +2,17 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
 	"github.com/mrsingh-rishi/voice-bot/model"
 	"github.com/mrsingh-rishi/voice-bot/queue"
+	"github.com/mrsingh-rishi/voice-bot/service/stt"
 )
-
-type DeepgramClient struct {
-	APIKey string
-}
-
-// NewDeepgramClient initializes a new DeepgramClient.
-func NewDeepgramClient(apiKey string) *DeepgramClient {
-	//TODO: initialize the Deepgram client with the API key and other necessary configurations.
-	return &DeepgramClient{APIKey: apiKey}
-}
 
 // TranscriberWorker is responsible for converting audio to text using Deepgram.
 type TranscriberWorker struct {
-	deepgram    *DeepgramClient
+	dgClient    *stt.DeepgramClient
 	InputQueue  *queue.Queue[model.AudioChunk]
 	OutputQueue *queue.Queue[model.TranscribedText]
 	ctx         context.Context
@@ -30,15 +20,49 @@ type TranscriberWorker struct {
 }
 
 // NewTranscriberWorker initializes a new TranscriberWorker with the given Deepgram API key.
-func NewTranscriberWorker(apiKey string) *TranscriberWorker {
+// It creates a Deepgram client (from the stt package) that is configured to push transcription
+// responses into its TranscriptionChannel. The worker then converts these responses and pushes
+// them into its own output queue.
+func NewTranscriberWorker(apiKey string, logger *log.Logger) *TranscriberWorker {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &TranscriberWorker{
-		deepgram:    NewDeepgramClient(apiKey),
+
+	// Create a generic queue for Deepgram transcription responses (as strings).
+	dgOutputQueue := queue.New[string]()
+
+	// Initialize the Deepgram client with the API key, the output queue, and logger.
+	dgClient, err := stt.NewDeepgramClient(apiKey, dgOutputQueue, logger)
+	if err != nil {
+		logger.Fatalf("Failed to initialize Deepgram client: %v", err)
+	}
+
+	// Create the worker's own output queue for transcribed text.
+	workerOutputQueue := queue.New[model.TranscribedText]()
+
+	worker := &TranscriberWorker{
+		dgClient:    dgClient,
 		InputQueue:  queue.New[model.AudioChunk](),
-		OutputQueue: queue.New[model.TranscribedText](),
+		OutputQueue: workerOutputQueue,
 		ctx:         ctx,
 		cancel:      cancel,
 	}
+
+	// Launch a goroutine that continuously reads from the Deepgram client's TranscriptionChannel
+	// and pushes each transcription (converted to model.TranscribedText) into the worker's output queue.
+	go func() {
+		for {
+			select {
+			case transcript, ok := <-dgClient.TranscriptionChannel:
+				if !ok {
+					return
+				}
+				worker.OutputQueue.Enqueue(model.TranscribedText(transcript))
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return worker
 }
 
 // Start begins the worker's processing loop in its own goroutine.
@@ -46,8 +70,10 @@ func (tw *TranscriberWorker) Start() {
 	go tw.process()
 }
 
-// process continuously polls the input queue, processes audio chunks,
-// and pushes transcribed text into the output queue.
+// process continuously polls the input queue for audio chunks. For each chunk,
+// it calls the Deepgram client's Process method to send the chunk over the WebSocket.
+// The Deepgram client (running in its own goroutines) will process the chunk and
+// eventually push the transcription response into its TranscriptionChannel.
 func (tw *TranscriberWorker) process() {
 	for {
 		select {
@@ -55,40 +81,23 @@ func (tw *TranscriberWorker) process() {
 			log.Println("TranscriberWorker: Shutting down")
 			return
 		default:
-			// Check if there is an item in the input queue.
 			if tw.InputQueue.Len() == 0 {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-
-			// Dequeue an audio chunk.
+			// Dequeue an audio chunk from the input queue.
 			audioChunk, ok := tw.InputQueue.Dequeue()
 			if !ok {
 				continue
 			}
-
-			// Process the audio chunk using the simulated Deepgram API.
-			transcribed := tw.transcribe(audioChunk)
-
-			// Enqueue the transcribed text.
-			tw.OutputQueue.Enqueue(transcribed)
+			// Process the audio chunk using the Deepgram client.
+			tw.dgClient.Process(audioChunk)
 		}
 	}
 }
 
-// transcribe simulates transcription of an audio chunk.
-// Replace this with an actual call to Deepgram's API.
-func (tw *TranscriberWorker) transcribe(audioChunk model.AudioChunk) model.TranscribedText {
-
-	// TODO: Implement the actual transcription logic using Deepgram's API.
-
-	// For demonstration, we just return a formatted string.
-	transcribed := model.TranscribedText(fmt.Sprintf("Deepgram transcription of: %s", string(audioChunk)))
-	log.Printf("TranscriberWorker: %s", transcribed)
-	return transcribed
-}
-
-// Stop terminates the processing loop.
+// Stop terminates the processing loop and closes the Deepgram WebSocket connection.
 func (tw *TranscriberWorker) Stop() {
 	tw.cancel()
+	tw.dgClient.Close()
 }
