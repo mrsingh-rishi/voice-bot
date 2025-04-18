@@ -7,18 +7,22 @@ import (
 	"log"
 	"net/http"
 	"os"
-
+    "context"
+    "strings"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 	gws "github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	twilio "github.com/twilio/twilio-go"
 	openapi "github.com/twilio/twilio-go/rest/api/v2010"
+    "github.com/sashabaranov/go-openai"
 )
 
 type callRequest struct {
     To string `json:"to"`
 }
+
+var messages = []openai.ChatCompletionMessage{}
 
 type callResponse struct {
     SID     string `json:"sid,omitempty"`
@@ -33,7 +37,16 @@ type deepgramResponse struct {
     } `json:"channel"`
 }
 
-func handleDeepgramMessage(msg []byte) {
+type Role struct {
+    Role string `json:"role"`
+}
+
+const (
+    UserRole      = "user"
+    AssistantRole = "assistant"
+)
+
+func handleDeepgramMessage(msg []byte, openAiChannel chan string) {
     // ignore empty frames
     if len(msg) == 0 {
         return
@@ -50,6 +63,10 @@ func handleDeepgramMessage(msg []byte) {
         }
         text := resp.Channel.Alternatives[0].Transcript
         log.Printf("📝 Final Deepgram transcript: %s", text)
+        if(len(text) > 0){
+            log.Printf("Sending final Transcript to open ai openAiChannel")
+            openAiChannel <- text
+        }
     }
 
     // Detect array vs. object
@@ -79,6 +96,88 @@ func handleDeepgramMessage(msg []byte) {
     }
 }
 
+func processText(openaiClient *openai.Client ,text string, elevenLabsChannel chan string) {
+    prompt := "You are Rishi's Assistant, a virtual assistant. You are friendly and helpful. You can answer questions, provide information, and assist with tasks. Always be polite and professional."
+    
+    if len(messages) == 0 {
+        messages = append(messages, openai.ChatCompletionMessage{
+            Role:    openai.ChatMessageRoleSystem,
+            Content: prompt,
+        })
+    }
+
+    chatHistory := buildChatHistory(text, Role{Role: UserRole})
+    req := openai.ChatCompletionRequest{
+        Model: openai.GPT4oMini,
+        Messages: chatHistory,
+        Stream: true,
+        MaxTokens: 100,
+    }
+
+    stream, err := openaiClient.CreateChatCompletionStream(context.Background(), req)
+
+    if err != nil {
+		log.Printf("Failed to stream OpenAI response: %v\n", err)
+		return
+	}
+
+    defer stream.Close()
+
+    // Stream the response chunks
+	var completeSentence string
+	for {
+		response, err := stream.Recv()
+		if err != nil {
+			if err.Error() == "EOF" {
+				log.Println("OpenAI response streaming completed")
+			} else {
+				log.Printf("Error receiving OpenAI response: %v\n", err)
+			}
+			break
+		}
+
+		// Extract and log the streamed text
+		chunk := response.Choices[0].Delta.Content
+		completeSentence += chunk
+		if chunk != "" {
+			// log.Printf("OpenAI streamed chunk: %s\n", chunk)
+			// Trigger TTS callback with the streamed text chunk
+			if IsCompleteSentence(chunk) {
+                log.Printf("Bot Message: ")
+                log.Printf("%s", completeSentence)
+				elevenLabsChannel <- completeSentence
+				completeSentence = ""
+			}
+
+		}
+	}
+
+}
+
+func IsCompleteSentence(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasSuffix(trimmed, ".") ||
+		strings.HasSuffix(trimmed, "!") ||
+		strings.HasSuffix(trimmed, "?")
+}
+
+
+func buildChatHistory(text string, role Role) []openai.ChatCompletionMessage {
+    if(role.Role == UserRole) {
+        messages = append(messages, openai.ChatCompletionMessage{
+            Role:  openai.ChatMessageRoleUser,
+            Content: text,
+        })
+    } else if(role.Role == AssistantRole) {
+        messages = append(messages, openai.ChatCompletionMessage{
+            Role:  openai.ChatMessageRoleAssistant,
+            Content: text,
+        })
+    }
+
+    return messages
+} 
+
 
 // Twilio’s streaming payload
 type twilioEvent struct {
@@ -106,6 +205,8 @@ func main() {
     baseUrl    := os.Getenv("BASE_URL")
     baseWsUrl  := os.Getenv("BASE_WS_URL")
 	deepgramApiKey := os.Getenv("DEEPGRAM_API_KEY")
+    openaiApiKey := os.Getenv("OPEN_AI_API_KEY")
+    elevenLabsApiKey := os.Getenv("ELEVEN_LABS_API_KEY")
     if accountSid == "" || authToken == "" || fromNumber == "" {
         log.Fatal("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER must be set")
     }
@@ -118,6 +219,12 @@ func main() {
 	if baseUrl == "" {
 		log.Fatal("BASE_URL must be set")
 	}
+    if openaiApiKey == "" {
+        log.Fatal("OPEN_AI_API_KEY must be set")
+    }
+    if elevenLabsApiKey == "" {
+        log.Fatal("ELEVEN_LABS_API_KEY must be set")
+    }
 
     // Init Twilio client
     client := twilio.NewRestClientWithParams(twilio.ClientParams{
@@ -197,6 +304,9 @@ func main() {
         }
         defer dgConn.Close()
 
+        openaiClient := openai.NewClient(openaiApiKey)
+
+        openAiChannel := make(chan string)
 		// Read Deepgram transcripts
         go func() {
             for {
@@ -205,7 +315,27 @@ func main() {
                     log.Printf("❌ Deepgram read error: %v", err)
                     return
                 }
-                handleDeepgramMessage(msg)
+                handleDeepgramMessage(msg, openAiChannel)
+            }
+        }()
+        
+        elevenLabsChannel := make(chan string)
+        go func() {
+            for {
+                text := <-openAiChannel
+
+                go processText(openaiClient, text, elevenLabsChannel)
+            }
+        }()
+
+        go func(){
+            for {
+
+                // process bot text, generate audio and send back to twilio.
+
+                // text := <- elevenLabsChannel
+
+                // go sendAudioChunks(ws, text, eleven)
             }
         }()
 
