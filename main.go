@@ -24,6 +24,61 @@ type callResponse struct {
     SID     string `json:"sid,omitempty"`
     Message string `json:"message"`
 }
+type deepgramResponse struct {
+    IsFinal bool `json:"is_final"`
+    Channel struct {
+        Alternatives []struct {
+            Transcript string `json:"transcript"`
+        } `json:"alternatives"`
+    } `json:"channel"`
+}
+
+func handleDeepgramMessage(msg []byte) {
+    // ignore empty frames
+    if len(msg) == 0 {
+        return
+    }
+
+    // Helper to extract & log a single response
+    process := func(resp deepgramResponse) {
+        if !resp.IsFinal {
+            return
+        }
+        if len(resp.Channel.Alternatives) == 0 {
+            // log.Println("⚠️  final segment but no alternatives")
+            return
+        }
+        text := resp.Channel.Alternatives[0].Transcript
+        log.Printf("📝 Final Deepgram transcript: %s", text)
+    }
+
+    // Detect array vs. object
+    switch msg[0] {
+    case '[':
+        // JSON array of responses
+        var arr []deepgramResponse
+        if err := json.Unmarshal(msg, &arr); err != nil {
+            // log.Printf("❌ parse array error: %v", err)
+            return
+        }
+        for _, resp := range arr {
+            process(resp)
+        }
+
+    case '{':
+        // Single JSON object
+        var resp deepgramResponse
+        if err := json.Unmarshal(msg, &resp); err != nil {
+            // log.Printf("❌ parse object error: %v", err)
+            return
+        }
+        process(resp)
+
+    default:
+        // log.Printf("❓ unexpected JSON prefix: %q", msg[0])
+    }
+}
+
 
 // Twilio’s streaming payload
 type twilioEvent struct {
@@ -150,7 +205,7 @@ func main() {
                     log.Printf("❌ Deepgram read error: %v", err)
                     return
                 }
-                log.Printf("📝 Deepgram transcript: %s", string(msg))
+                handleDeepgramMessage(msg)
             }
         }()
 
@@ -183,7 +238,7 @@ func main() {
                 if err := dgConn.WriteMessage(gws.BinaryMessage, pcm); err != nil {
                     log.Printf("❌ Deepgram write error: %v", err)
                 } else {
-                    log.Printf("📤 forwarded %d bytes to Deepgram", len(pcm))
+                    // log.Printf("📤 forwarded %d bytes to Deepgram", len(pcm))
                 }
 
             case "stop":
