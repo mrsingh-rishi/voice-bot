@@ -9,6 +9,9 @@ import (
 	"os"
     "context"
     "strings"
+    "bytes"
+    "io"
+    "net/url"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
 	gws "github.com/gorilla/websocket"
@@ -36,7 +39,7 @@ type deepgramResponse struct {
         } `json:"alternatives"`
     } `json:"channel"`
 }
-
+var streamSid string
 type Role struct {
     Role string `json:"role"`
 }
@@ -176,9 +179,104 @@ func buildChatHistory(text string, role Role) []openai.ChatCompletionMessage {
     }
 
     return messages
-} 
+}
+func streamElevenTTS(
+    apiKey   string,
+    ws       *websocket.Conn,
+    text     string,
+    streamID string,
+) error {
+    log.Printf("▶️ Starting streamElevenTTS (streamID=%s)", streamID)
 
+    // 1️⃣ Build the streaming URL with query params
+    voiceID := "JBFqnCBsd6RMkjVDRZzb"
+    base, _ := url.Parse(
+        fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s/stream", voiceID),
+    )
+    // request alaw at 8kHz – adjust as needed (mp3_44100_128 is another option) 
+    q := base.Query()
+    q.Set("output_format", "alaw_8000")
+    // q.Set("optimize_streaming_latency", "0") // deprecated :contentReference[oaicite:7]{index=7}
+    base.RawQuery = q.Encode()
+    log.Printf("🔗 Streaming URL: %s", base.String())
 
+    // 2️⃣ Prepare JSON payload
+    payload := map[string]interface{}{
+        "text":     text,
+        "model_id": "eleven_multilingual_v2",
+        // "voice_settings": map[string]float64{
+        //     "stability":        0.75,
+        //     "similarity_boost": 0.7,
+        // },
+    }
+    bodyBytes, err := json.Marshal(payload)
+    if err != nil {
+        return fmt.Errorf("❌ marshal payload: %w", err)
+    }
+
+    // 3️⃣ Build HTTP request
+    req, err := http.NewRequest("POST", base.String(), bytes.NewReader(bodyBytes))
+    if err != nil {
+        return fmt.Errorf("❌ build request: %w", err)
+    }
+    req.Header.Set("xi-api-key", apiKey)    // :contentReference[oaicite:8]{index=8}
+    req.Header.Set("Content-Type", "application/json") // :contentReference[oaicite:9]{index=9}
+
+    // 4️⃣ Send request
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil {
+        return fmt.Errorf("❌ HTTP request error: %w", err)
+    }
+    defer resp.Body.Close()
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("❌ bad status: %s", resp.Status)
+    }
+    log.Printf("📶 Streaming began (status %s)", resp.Status)
+
+    // 5️⃣ Read chunked audio and emit as media events
+    buf := make([]byte, 4096)
+    for {
+        n, readErr := resp.Body.Read(buf)
+        if n > 0 {
+            // Base64‑encode raw audio chunk
+            b64 := base64.StdEncoding.EncodeToString(buf[:n])
+
+            // JSON media event
+            mediaMsg := map[string]interface{}{
+                "event":     "media",
+                "streamSid": streamID,
+                "media": map[string]string{
+                    "payload": b64,
+                },
+            }
+            if err := ws.WriteJSON(mediaMsg); err != nil {
+                return fmt.Errorf("❌ WS write media: %w", err)
+            }
+        }
+        if readErr != nil {
+            if readErr != io.EOF {
+                return fmt.Errorf("❌ read stream: %w", readErr)
+            }
+            break
+        }
+    }
+    log.Println("✅ Audio stream complete")
+
+    // 6️⃣ Final mark event
+    markMsg := map[string]interface{}{
+        "event":     "mark",
+        "streamSid": streamID,
+        "mark": map[string]string{
+            "name": "audio chunks sent",
+        },
+    }
+    if err := ws.WriteJSON(markMsg); err != nil {
+        return fmt.Errorf("❌ WS write mark: %w", err)
+    }
+    log.Println("🏁 Sent final mark event")
+
+    return nil
+}
 // Twilio’s streaming payload
 type twilioEvent struct {
     Event string `json:"event"` // "start", "media", "stop"
@@ -291,7 +389,6 @@ func main() {
     app.Get("/stream", websocket.New(func(ws *websocket.Conn) {
         defer ws.Close()
         log.Println("WebSocket /stream connected")
-		
 		// Dial into Deepgram
         dgURL := "wss://api.deepgram.com/v1/listen?model=nova-2-phonecall&encoding=mulaw&sample_rate=8000&channels=1&language=en-US&punctuate=true&smart_format=true&vad_events=true"
         header := http.Header{
@@ -333,9 +430,9 @@ func main() {
 
                 // process bot text, generate audio and send back to twilio.
 
-                // text := <- elevenLabsChannel
-
-                // go sendAudioChunks(ws, text, eleven)
+                text := <- elevenLabsChannel
+                log.Printf("Bot Text Recieved : %s", text);
+                go streamElevenTTS(elevenLabsApiKey, ws, text, streamSid)
             }
         }()
 
@@ -351,11 +448,12 @@ func main() {
                 log.Println("json unmarshal error:", err)
                 continue
             }
-
+            log.Printf("StreamSid: %s", streamSid)
             switch ev.Event {
             case "start":
                 log.Printf("Stream started: CallSid=%s, StreamSid=%s\n",
-                    ev.Start.CallSid, ev.Start.StreamSid)
+                ev.Start.CallSid, ev.Start.StreamSid)
+                streamSid = ev.Start.StreamSid
 
             case "media":
                 // decode Base64 payload
