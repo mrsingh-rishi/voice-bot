@@ -149,6 +149,7 @@ func processText(openaiClient *openai.Client ,text string, elevenLabsChannel cha
                 log.Printf("Bot Message: ")
                 log.Printf("%s", completeSentence)
 				elevenLabsChannel <- completeSentence
+                buildChatHistory(completeSentence, Role{Role: AssistantRole})
 				completeSentence = ""
 			}
 
@@ -191,11 +192,11 @@ func streamElevenTTS(
     // 1️⃣ Build the streaming URL with query params
     voiceID := "JBFqnCBsd6RMkjVDRZzb"
     base, _ := url.Parse(
-        fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s/stream", voiceID),
+        fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s/stream/with-timestamps", voiceID),
     )
     // request alaw at 8kHz – adjust as needed (mp3_44100_128 is another option) 
     q := base.Query()
-    q.Set("output_format", "alaw_8000")
+    q.Set("output_format", "ulaw_8000")
     // q.Set("optimize_streaming_latency", "0") // deprecated :contentReference[oaicite:7]{index=7}
     base.RawQuery = q.Encode()
     log.Printf("🔗 Streaming URL: %s", base.String())
@@ -204,10 +205,10 @@ func streamElevenTTS(
     payload := map[string]interface{}{
         "text":     text,
         "model_id": "eleven_multilingual_v2",
-        // "voice_settings": map[string]float64{
-        //     "stability":        0.75,
-        //     "similarity_boost": 0.7,
-        // },
+        "voice_settings": map[string]float64{
+            "stability":        0.75,
+            "similarity_boost": 0.7,
+        },
     }
     bodyBytes, err := json.Marshal(payload)
     if err != nil {
@@ -234,30 +235,37 @@ func streamElevenTTS(
     log.Printf("📶 Streaming began (status %s)", resp.Status)
 
     // 5️⃣ Read chunked audio and emit as media events
-    buf := make([]byte, 4096)
-    for {
-        n, readErr := resp.Body.Read(buf)
-        if n > 0 {
-            // Base64‑encode raw audio chunk
-            b64 := base64.StdEncoding.EncodeToString(buf[:n])
+    dec := json.NewDecoder(resp.Body)
 
-            // JSON media event
-            mediaMsg := map[string]interface{}{
-                "event":     "media",
-                "streamSid": streamID,
-                "media": map[string]string{
-                    "payload": b64,
-                },
-            }
-            if err := ws.WriteJSON(mediaMsg); err != nil {
-                return fmt.Errorf("❌ WS write media: %w", err)
-            }
+    // 2️⃣ Loop, decoding one JSON value at a time
+    for {
+        // Define a struct matching exactly what you need
+        var chunk struct {
+            AudioBase64 string `json:"audio_base64"`
         }
-        if readErr != nil {
-            if readErr != io.EOF {
-                return fmt.Errorf("❌ read stream: %w", readErr)
+
+        // Try to decode the next JSON object
+        if err := dec.Decode(&chunk); err != nil {
+            if err == io.EOF {
+                // no more JSON objects
+                break
             }
-            break
+            return fmt.Errorf("failed to decode JSON chunk: %w", err)
+        }
+
+        // 3️⃣ Use the extracted audio_base64
+        audioBase64 := chunk.AudioBase64
+
+        // … send this out to your websocket, or whatever you need:
+        mediaMsg := map[string]interface{}{
+            "event":     "media",
+            "streamSid": streamID,
+            "media": map[string]string{
+                "payload": audioBase64,
+            },
+        }
+        if err := ws.WriteJSON(mediaMsg); err != nil {
+            return fmt.Errorf("websocket write media error: %w", err)
         }
     }
     log.Println("✅ Audio stream complete")
@@ -448,7 +456,6 @@ func main() {
                 log.Println("json unmarshal error:", err)
                 continue
             }
-            log.Printf("StreamSid: %s", streamSid)
             switch ev.Event {
             case "start":
                 log.Printf("Stream started: CallSid=%s, StreamSid=%s\n",
