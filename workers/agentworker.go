@@ -65,18 +65,27 @@ Your task is to choose the single filler‑word from that list that a person wou
 }
 
 func (aw *AgentWorker) Start() {
-	// Start the agent worker
-	go func(){
-		for {
+    go func() {
+        for {
+            select {
+            case <-aw.ctx.Done():
+                // context cancelled → exit
+                return
 
-			transcript := <-aw.TranscriptChannel
+            case transcript, ok := <-aw.TranscriptChannel:
+                if !ok {
+                    // upstream closed → exit
+                    return
+                }
 
-			// generates a filler word for the given transcript which makes the bot more likely to be human
-			go aw.FillerResponseGenerator.StreamResponse(transcript)
-			// sends the transcript to OpenAI for processing actual response
-			go aw.OpenAIClient.StreamResponse(transcript)
-		}
-	}()
+                // first generate a human‑like filler word
+                go aw.FillerResponseGenerator.StreamResponse(transcript)
+
+                // then generate the actual assistant response
+                go aw.OpenAIClient.StreamResponse(transcript)
+            }
+        }
+    }()
 }
 
 func (aw *AgentWorker) Stop() {
