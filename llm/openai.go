@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
-
+	"regexp"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -54,7 +54,7 @@ func (c *OpenAIClient) StreamResponse(input string) {
 	}
 	defer stream.Close()
 
-	log.Println("Streaming response from OpenAI...")
+	// log.Println("Streaming response from OpenAI...")
 
 	// Stream the response chunks
 	var completeSentence string
@@ -73,11 +73,18 @@ func (c *OpenAIClient) StreamResponse(input string) {
 		chunk := response.Choices[0].Delta.Content
 		completeSentence += chunk
 		if chunk != "" {
-			log.Printf("OpenAI streamed chunk: %s\n", chunk)
+			// log.Printf("OpenAI streamed chunk: %s\n", chunk)
 			// Trigger TTS callback with the streamed text chunk
 			if IsCompleteSentence(chunk) {
 				// send complete sentence to channel
-				c.StreamingChannel <- completeSentence
+				// log.Printf("Complete sentence: %s\n", completeSentence)
+				log.Printf("Bot text: %s\n", completeSentence)
+				log.Printf("Sending complete sentence to streaming channel ")
+				resp := splitByPunctuation(completeSentence)
+				for i := 0; i < len(resp); i++ {
+					log.Printf("Sending chunk to streaming channel: %s\n", resp[i])
+					c.StreamingChannel <- resp[i]
+				}
 				completeSentence = ""
 			}
 
@@ -90,4 +97,18 @@ func IsCompleteSentence(text string) bool {
 	return strings.HasSuffix(trimmed, ".") ||
 		strings.HasSuffix(trimmed, "!") ||
 		strings.HasSuffix(trimmed, "?")
+}
+
+func splitByPunctuation(s string) []string {
+    // [[:punct:]] matches any ASCII punctuation; the Unicode flag is on by default in Go's RE2
+    re := regexp.MustCompile(`[[:punct:]]+`)
+    raw := re.Split(s, -1)
+
+    var parts []string
+    for _, p := range raw {
+        if trimmed := strings.TrimSpace(p); trimmed != "" {
+            parts = append(parts, trimmed)
+        }
+    }
+    return parts
 }

@@ -1,8 +1,10 @@
 package workers
 
 import (
-	"fmt"
 	"context"
+	"fmt"
+	"log"
+
 	"github.com/mrsingh-rishi/voice-bot/llm"
 )
 
@@ -77,7 +79,7 @@ func (aw *AgentWorker) Start() {
                     // upstream closed → exit
                     return
                 }
-
+				log.Print("Received transcript: ", transcript)
                 // first generate a human‑like filler word
                 go aw.FillerResponseGenerator.StreamResponse(transcript)
 
