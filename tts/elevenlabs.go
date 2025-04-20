@@ -9,6 +9,8 @@ import (
 	"net/url"
 )
 
+const EndOfUtterance = "__END_OF_UTTERANCE__"
+
 type ElevenLabsClient struct {
 	APIKey string
 	VoiceId string
@@ -93,6 +95,8 @@ func (client *ElevenLabsClient) GenerateSpeech(text string) (error) {
 		// Send the audioBase64 to the output device channel
 		client.OutputDeviceChannel <- audioBase64
     }
-
+	// 6️⃣ Send end-of-utterance signal
+	// This is a sentinel value to indicate the end of the utterance
+	client.OutputDeviceChannel <- EndOfUtterance
 	return nil
 }
