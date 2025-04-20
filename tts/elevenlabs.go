@@ -16,14 +16,14 @@ type ElevenLabsClient struct {
 	OutputDeviceChannel chan <- string
 }
 
-func NewElevenLabsClient(apiKey string, voiceId string, outputDeviceChannel chan <- string, modelId string) *ElevenLabsClient {
+func NewElevenLabsClient(apiKey string, voiceId string, modelId string, outputDeviceChannel chan <- string) (*ElevenLabsClient, error) {
 
 	return &ElevenLabsClient{
 		APIKey: apiKey,
 		VoiceId: voiceId,
 		ModelId: modelId,
 		OutputDeviceChannel: outputDeviceChannel,
-	}
+	}, nil
 }
 
 func (client *ElevenLabsClient) GenerateSpeech(text string) (error) {
