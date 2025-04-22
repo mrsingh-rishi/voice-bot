@@ -79,7 +79,6 @@ func (dg *DeepgramClient) SendAudio(audioChannel <-chan []byte) {
 				return
 			case audio := <-audioChannel:
 				if len(audio) == 0 {
-					log.Println("Received empty audio chunk")
 					continue
 				}
 				if dg.Connection == nil {
@@ -103,10 +102,10 @@ func (dg *DeepgramClient) SendAudio(audioChannel <-chan []byte) {
 				_, message, err := dg.Connection.ReadMessage()
 				if err != nil {
 					log.Printf("Error reading response from Deepgram: %v\n", err)
-					return
+					continue
 				}
 
-				// Try to parse as array response first
+				// Try to parse as array first
 				var arrayResp []TranscriptionMessage
 				if err := json.Unmarshal(message, &arrayResp); err == nil {
 					for _, resp := range arrayResp {
@@ -131,8 +130,12 @@ func (dg *DeepgramClient) processTranscription(resp TranscriptionMessage) {
 	if len(resp.Channel.Alternatives) > 0 {
 		text := resp.Channel.Alternatives[0].Transcript
 		if text != "" && resp.IsFinal {
-			dg.TranscriptionChannel <- text
-			log.Printf("Transcription: %s\n", text)
+			select {
+			case <-dg.ctx.Done():
+				return
+			case dg.TranscriptionChannel <- text:
+				log.Printf("Transcription: %s\n", text)
+			}
 		}
 	}
 }
