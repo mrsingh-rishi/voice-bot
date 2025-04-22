@@ -3,26 +3,27 @@ package llm
 import (
 	"context"
 	"log"
-	"strings"
 	"regexp"
+	"strings"
+
 	"github.com/sashabaranov/go-openai"
 )
 
 type OpenAIClient struct {
-	Client *openai.Client
-	Messages []openai.ChatCompletionMessage
+	Client             *openai.Client
+	Messages           []openai.ChatCompletionMessage
 	SystemInstructions string
-	StreamingChannel chan <- string
-	Model string // Model to use for OpenAI API
-	ActionChannel chan string // Channel to send actions to the main thread(Type will be defined later)
+	StreamingChannel   chan<- string
+	Model              string      // Model to use for OpenAI API
+	ActionChannel      chan string // Channel to send actions to the main thread(Type will be defined later)
 }
 
 func NewOpenAIClient(apiKey string, systemInstructions string, model string, streamingChannel chan<- string) (*OpenAIClient, error) {
 	client := openai.NewClient(apiKey)
 	return &OpenAIClient{
-		Client: client,
+		Client:             client,
 		SystemInstructions: systemInstructions,
-		StreamingChannel: streamingChannel,
+		StreamingChannel:   streamingChannel,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: "system", Content: systemInstructions}, // System instructions
 		},
@@ -42,9 +43,9 @@ func (c *OpenAIClient) StreamResponse(input string) {
 	})
 	// Include system instructions along with the user input
 	req := openai.ChatCompletionRequest{
-		Model: c.Model,
+		Model:    c.Model,
 		Messages: c.Messages,
-		Stream: true, // Enable streaming
+		Stream:   true, // Enable streaming
 	}
 
 	stream, err := c.Client.CreateChatCompletionStream(context.Background(), req)
@@ -81,9 +82,9 @@ func (c *OpenAIClient) StreamResponse(input string) {
 				log.Printf("Bot text: %s\n", completeSentence)
 				log.Printf("Sending complete sentence to streaming channel ")
 				resp := splitByPunctuation(completeSentence)
-				for i := 0; i < len(resp); i++ {
-					log.Printf("Sending chunk to streaming channel: %s\n", resp[i])
-					c.StreamingChannel <- resp[i]
+				for _, chunk := range resp {
+					log.Printf("Sending chunk to streaming channel: %s\n", chunk)
+					c.StreamingChannel<-chunk
 				}
 				completeSentence = ""
 			}
@@ -100,15 +101,20 @@ func IsCompleteSentence(text string) bool {
 }
 
 func splitByPunctuation(s string) []string {
-    // [[:punct:]] matches any ASCII punctuation; the Unicode flag is on by default in Go's RE2
-    re := regexp.MustCompile(`[[:punct:]]+`)
-    raw := re.Split(s, -1)
+	// Split on all common English punctuation marks and preserve them
+	re := regexp.MustCompile(`([,.;:!?])`)
+	parts := re.Split(s, -1)
+	punctuation := re.FindAllString(s, -1)
 
-    var parts []string
-    for _, p := range raw {
-        if trimmed := strings.TrimSpace(p); trimmed != "" {
-            parts = append(parts, trimmed)
-        }
-    }
-    return parts
+	var result []string
+	for i, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			if i < len(punctuation) {
+				result = append(result, trimmed+punctuation[i])
+			} else {
+				result = append(result, trimmed)
+			}
+		}
+	}
+	return result
 }
