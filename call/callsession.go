@@ -66,7 +66,7 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 		return nil, err2
 	}
 	log.Println("Agent worker created")
-	agentResponseWorker, err3 := workers.NewAgentResponseWorker(elevenLabsApiKey, "JBFqnCBsd6RMkjVDRZzb", "eleven_multilingual_v1", streamingChannel, outputChannel)
+	agentResponseWorker, err3 := workers.NewAgentResponseWorker(elevenLabsApiKey, "cjVigY5qzO86Huf0OWal", "eleven_multilingual_v1", streamingChannel, outputChannel)
 	if err3 != nil {
 		return nil, err3
 	}
@@ -107,6 +107,10 @@ func (c *Call) CreateOutputWorker() error {
 
 	c.OutputWorker = outputWorker
 	return nil
+}
+
+func (c *Call) StartOutputWorker(){
+	c.OutputWorker.Start()
 }
 
 // CleanupResources gracefully releases all resources associated with the Call instance.
@@ -224,6 +228,7 @@ func (c *Call) StartRecievingAudio(audioChannel chan []byte) {
 		case "start":
 			log.Printf("Stream started: CallSid=%s, StreamSid=%s", ev.Start.CallSid, ev.Start.StreamSid)
 			c.SetStreamSid(ev.Start.StreamSid)
+			c.StartOutputWorker()
 
 		case "media":
 			chunk, err := base64.StdEncoding.DecodeString(ev.Media.Payload)
