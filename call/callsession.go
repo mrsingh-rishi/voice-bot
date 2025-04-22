@@ -30,6 +30,7 @@ type Call struct {
 	ws                   *websocket.Conn
 	AgentWorker          *workers.AgentWorker
 	AgentResponseWorker  *workers.AgentResponseWorker
+	FillerResponseWorker *workers.FillerResponseWorker
 	OutputWorker         *output.TwilioOutput
 	StreamingChannel     chan string
 	OutputChannel        chan string
@@ -50,11 +51,13 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 
 	streamingChannel := make(chan string, 10)
 	transcriptionChannel := make(chan string)
+	fillerResponseInputChannel := make(chan string)
+	fillerResponseOutputChannel := make(chan string)
 	outputChannel := make(chan string)
 	audioChannel := make(chan []byte)
 	done := make(chan struct{})
 
-	deepgramClient, err1 := stt.NewDeepgramClient(deepgramApiKey, transcriptionChannel)
+	deepgramClient, err1 := stt.NewDeepgramClient(deepgramApiKey, transcriptionChannel, fillerResponseInputChannel)
 	if err1 != nil {
 		return nil, err1
 	}
@@ -68,11 +71,18 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 		return nil, err3
 	}
 	log.Println("Agent response worker created")
+	fillerResponseWorker, err4 := workers.NewFillerResponseWorker(openaiApiKey, "gpt-4o-mini", fillerResponseOutputChannel, fillerResponseInputChannel)
+	if err4 != nil {
+		return nil, err4
+	}
+	log.Println("Filler response worker created")
+
 	return &Call{
 		streamSid:            "",
 		ws:                   ws,
 		AgentWorker:          agentWorker,
 		AgentResponseWorker:  agentResponseWorker,
+		FillerResponseWorker: fillerResponseWorker,
 		OutputWorker:         nil,
 		StreamingChannel:     streamingChannel,
 		OutputChannel:        outputChannel,
@@ -249,6 +259,8 @@ func (c *Call) Start() {
 
 	// Start the agent response worker
 	c.AgentResponseWorker.Start()
+
+	c.FillerResponseWorker.Start()
 
 	// Start receiving audio in a separate goroutine
 	go func() {

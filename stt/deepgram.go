@@ -18,6 +18,7 @@ type DeepgramClient struct {
 	Endpoint   string
 	// TranscriptionChannel chan TranscriptionChannel
 	TranscriptionChannel chan string
+	TranscriptionChannel2 chan string
 }
 
 type TranscriptionChannel struct {
@@ -47,7 +48,7 @@ type DeepgramResponse struct {
 }
 
 // for now we will use default deepgram config
-func NewDeepgramClient(apikey string, transcriptionChannel chan string) (*DeepgramClient, error) {
+func NewDeepgramClient(apikey string, transcriptionChannel chan string, transcriptionChannel2 chan string) (*DeepgramClient, error) {
 	dgURL := "wss://api.deepgram.com/v1/listen?model=nova-2-phonecall&encoding=mulaw&sample_rate=8000&channels=1&language=en-US&punctuate=true&smart_format=true&vad_events=true"
 
 	header := http.Header{
@@ -67,6 +68,7 @@ func NewDeepgramClient(apikey string, transcriptionChannel chan string) (*Deepgr
 		APIKey:               apikey,
 		Endpoint:             dgURL,
 		TranscriptionChannel: transcriptionChannel,
+		TranscriptionChannel2: transcriptionChannel2,
 		// TranscriptionChannel: make(chan TranscriptionChannel),
 	}, nil
 }
@@ -133,8 +135,9 @@ func (dg *DeepgramClient) processTranscription(resp TranscriptionMessage) {
 			select {
 			case <-dg.ctx.Done():
 				return
-			case dg.TranscriptionChannel <- text:
-				log.Printf("Transcription: %s\n", text)
+			default:
+				dg.TranscriptionChannel <- text
+				dg.TranscriptionChannel2 <- text
 			}
 		}
 	}
@@ -145,6 +148,6 @@ func (dg *DeepgramClient) Close() error {
 	if err := dg.Connection.WriteMessage(gws.CloseMessage, gws.FormatCloseMessage(gws.CloseNormalClosure, "Closing connection")); err != nil {
 		return err
 	}
-	dg.ctx.Done()
+	dg.Cancel()
 	return dg.Connection.Close()
 }
