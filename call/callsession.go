@@ -48,7 +48,7 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 		return nil, errors.New("missing required environment variables")
 	}
 
-	streamingChannel := make(chan string)
+	streamingChannel := make(chan string, 10)
 	transcriptionChannel := make(chan string)
 	outputChannel := make(chan string)
 	audioChannel := make(chan []byte)
@@ -101,28 +101,71 @@ func (c *Call) CreateOutputWorker() error {
 
 // CleanupResources gracefully releases all resources associated with the Call instance.
 func (c *Call) CleanupResources() {
+	// Signal all goroutines to stop first
 	if c.done != nil {
-		close(c.done)
+		select {
+		case <-c.done:
+			// Channel already closed
+		default:
+			close(c.done)
+		}
 	}
 
-	if c.ws != nil {
-		c.ws.Close()
-	}
-
+	// Stop workers in reverse order of creation
 	if c.OutputWorker != nil {
 		c.OutputWorker.Stop()
-	}
-
-	if c.AgentWorker != nil {
-		c.AgentWorker.Stop()
 	}
 
 	if c.AgentResponseWorker != nil {
 		c.AgentResponseWorker.Stop()
 	}
 
+	if c.AgentWorker != nil {
+		c.AgentWorker.Stop()
+	}
+
+	// Close Deepgram client before closing channels
 	if c.DeepgramClient != nil {
 		c.DeepgramClient.Close()
+	}
+
+	// Close channels safely
+	if c.StreamingChannel != nil {
+		select {
+		case <-c.StreamingChannel:
+			// Channel already closed
+		default:
+			close(c.StreamingChannel)
+		}
+	}
+	if c.OutputChannel != nil {
+		select {
+		case <-c.OutputChannel:
+			// Channel already closed
+		default:
+			close(c.OutputChannel)
+		}
+	}
+	if c.TranscriptionChannel != nil {
+		select {
+		case <-c.TranscriptionChannel:
+			// Channel already closed
+		default:
+			close(c.TranscriptionChannel)
+		}
+	}
+	if c.AudioChannel != nil {
+		select {
+		case <-c.AudioChannel:
+			// Channel already closed
+		default:
+			close(c.AudioChannel)
+		}
+	}
+
+	// Close WebSocket connection last
+	if c.ws != nil {
+		c.ws.Close()
 	}
 }
 
@@ -151,50 +194,50 @@ func (c *Call) StartRecievingAudio(audioChannel chan []byte) {
 		// 		return
 		// 	}
 
-			_, msg, err := c.ws.ReadMessage()
-			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					log.Println("WebSocket closed normally:", err)
-				} else {
-					log.Printf("WebSocket read error: %v", err)
-				}
-				return
+		_, msg, err := c.ws.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Println("WebSocket closed normally:", err)
+			} else {
+				log.Printf("WebSocket read error: %v", err)
 			}
+			return
+		}
 
-			var ev twilioEvent
-			if err := json.Unmarshal(msg, &ev); err != nil {
-				log.Printf("JSON unmarshal error: %v", err)
+		var ev twilioEvent
+		if err := json.Unmarshal(msg, &ev); err != nil {
+			log.Printf("JSON unmarshal error: %v", err)
+			continue
+		}
+
+		switch ev.Event {
+		case "start":
+			log.Printf("Stream started: CallSid=%s, StreamSid=%s", ev.Start.CallSid, ev.Start.StreamSid)
+			c.SetStreamSid(ev.Start.StreamSid)
+
+		case "media":
+			chunk, err := base64.StdEncoding.DecodeString(ev.Media.Payload)
+			if err != nil {
+				log.Printf("Base64 decode error: %v", err)
 				continue
 			}
+			audioChannel <- chunk
+			// select {
+			// case audioChannel <- chunk:
+			// 	// Successfully sent chunk
+			// case <-c.done:
+			// 	return
+			// default:
+			// 	log.Println("Audio channel is full, dropping chunk")
+			// }
 
-			switch ev.Event {
-			case "start":
-				log.Printf("Stream started: CallSid=%s, StreamSid=%s", ev.Start.CallSid, ev.Start.StreamSid)
-				c.SetStreamSid(ev.Start.StreamSid)
+		case "stop":
+			log.Println("Stream stopped")
+			return
 
-			case "media":
-				chunk, err := base64.StdEncoding.DecodeString(ev.Media.Payload)
-				if err != nil {
-					log.Printf("Base64 decode error: %v", err)
-					continue
-				}
-				audioChannel <- chunk
-				// select {
-				// case audioChannel <- chunk:
-				// 	// Successfully sent chunk
-				// case <-c.done:
-				// 	return
-				// default:
-				// 	log.Println("Audio channel is full, dropping chunk")
-				// }
-
-			case "stop":
-				log.Println("Stream stopped")
-				return
-
-			default:
-				log.Printf("Unknown event: %s", ev.Event)
-			}
+		default:
+			log.Printf("Unknown event: %s", ev.Event)
+		}
 		// }
 	}
 }
