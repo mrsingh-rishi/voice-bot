@@ -81,11 +81,12 @@ func (c *OpenAIClient) StreamResponse(input string) {
 				// log.Printf("Complete sentence: %s\n", completeSentence)
 				log.Printf("Bot text: %s\n", completeSentence)
 				log.Printf("Sending complete sentence to streaming channel ")
-				resp := splitByPunctuation(completeSentence)
-				for _, chunk := range resp {
-					log.Printf("Sending chunk to streaming channel: %s\n", chunk)
-					c.StreamingChannel<-chunk
-				}
+				// resp := splitByPunctuation(completeSentence)
+				// for _, chunk := range resp {
+				// 	log.Printf("Sending chunk to streaming channel: %s\n", chunk)
+				// 	c.StreamingChannel<-chunk
+				// }
+				c.StreamingChannel <- completeSentence
 				completeSentence = ""
 			}
 
