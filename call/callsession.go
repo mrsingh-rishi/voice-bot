@@ -49,12 +49,19 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 		return nil, errors.New("missing required environment variables")
 	}
 
+	// streamingChannel: AgentWorker output -> AgentResponseWorker input
 	streamingChannel := make(chan string, 10)
+	// transcriptionChannel: DeepgramClient output -> AgentWorker input
 	transcriptionChannel := make(chan string)
+	// fillerResponseInputChannel: DeepgramClient output -> FillerResponseWorker input
 	fillerResponseInputChannel := make(chan string)
+	// fillerResponseOutputChannel: FillerResponseWorker output (not used in this Call struct)
 	fillerResponseOutputChannel := make(chan string)
+	// outputChannel: AgentResponseWorker output -> OutputWorker input
 	outputChannel := make(chan string)
+	// audioChannel: StartRecievingAudio output -> DeepgramClient input
 	audioChannel := make(chan []byte)
+	// done: signal channel for graceful shutdown
 	done := make(chan struct{})
 
 	deepgramClient, err1 := stt.NewDeepgramClient(deepgramApiKey, transcriptionChannel, fillerResponseInputChannel)
