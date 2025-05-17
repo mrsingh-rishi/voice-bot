@@ -50,6 +50,8 @@ func main() {
 	deepgramApiKey := os.Getenv("DEEPGRAM_API_KEY")
 	openaiApiKey := os.Getenv("OPEN_AI_API_KEY")
 	elevenLabsApiKey := os.Getenv("ELEVEN_LABS_API_KEY")
+	baseUrl = os.Getenv("BASE_URL")
+	baseWsUrl = os.Getenv("BASE_WS_URL")
 	if accountSid == "" || authToken == "" || fromNumber == "" {
 		log.Fatal("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER must be set")
 	}
@@ -68,7 +70,21 @@ func main() {
 	if elevenLabsApiKey == "" {
 		log.Fatal("ELEVEN_LABS_API_KEY must be set")
 	}
+	if baseUrl == "" {
+		log.Fatal("BASE_URL must be set")
+	}
+	if baseWsUrl == "" {
+		log.Fatal("BASE_WS_URL must be set")
+	}
+	if baseUrl[len(baseUrl)-1:] != "/" {
+		baseUrl += "/"
+	}
+	if baseWsUrl[len(baseWsUrl)-1:] != "/" {
+		baseWsUrl += "/"
+	}
 
+	log.Printf("Server Running on %s", baseUrl)
+	log.Printf("WebSocket URL: %s", baseWsUrl)
 	// Init Twilio client
 	client := twilio.NewRestClientWithParams(twilio.ClientParams{
 		Username: accountSid,
