@@ -49,7 +49,7 @@ type DeepgramResponse struct {
 
 // for now we will use default deepgram config
 func NewDeepgramClient(apikey string, transcriptionChannel chan string, transcriptionChannel2 chan string) (*DeepgramClient, error) {
-	dgURL := "wss://api.deepgram.com/v1/listen?model=nova-2-phonecall&encoding=mulaw&sample_rate=8000&channels=1&language=en-US&punctuate=true&smart_format=true&vad_events=true"
+	dgURL := "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=mulaw&sample_rate=8000&channels=1&language=multi&punctuate=true&smart_format=true&vad_events=true"
 
 	header := http.Header{
 		"Authorization": {fmt.Sprintf("Token %s", apikey)},
