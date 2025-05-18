@@ -59,6 +59,7 @@ func (aw *AgentWorker) Start() {
 			select {
 			case <-aw.ctx.Done():
 				// context cancelled → exit
+				log.Println("AgentWorker context done, exiting...")
 				return
 
 			case transcript, ok := <-aw.AgentInputChannel:
