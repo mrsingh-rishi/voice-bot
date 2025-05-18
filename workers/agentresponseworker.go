@@ -39,18 +39,23 @@ func (w *AgentResponseWorker) Start() error {
 
 	go func() {
 		for {
-			response := <- w.StreamingChannel
-			if response == "" {
-				log.Println("Received empty response, skipping...")
-				continue
+			select{
+				case <-w.ctx.Done():
+					log.Println("AgentResponseWorker context done, exiting...")
+					return
+				case response := <- w.StreamingChannel: 
+					if response == "" {
+						log.Println("Received empty response, skipping...")
+						continue
+					}
+					log.Printf("Received response: %s\n", response)
+					// Send the response to the TTS client
+					if err := w.TTSClient.GenerateSpeech(response); err != nil {
+						log.Printf("Error streaming response: %v\n", err)
+						continue
+					}
+					// Send the audio data to the output device channel	
 			}
-			log.Printf("Received response: %s\n", response)
-			// Send the response to the TTS client
-			if err := w.TTSClient.GenerateSpeech(response); err != nil {
-				log.Printf("Error streaming response: %v\n", err)
-				continue
-			}
-			// Send the audio data to the output device channel
 		}
 	}()
 
