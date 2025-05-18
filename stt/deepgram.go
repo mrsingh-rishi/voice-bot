@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	gws "github.com/gorilla/websocket"
 )
@@ -19,6 +20,8 @@ type DeepgramClient struct {
 	// TranscriptionChannel chan TranscriptionChannel
 	TranscriptionChannel chan string
 	TranscriptionChannel2 chan string
+	closeOnce sync.Once
+    writeMu   sync.Mutex
 }
 
 type TranscriptionChannel struct {
@@ -145,9 +148,6 @@ func (dg *DeepgramClient) processTranscription(resp TranscriptionMessage) {
 
 // Close closes the Deepgram WebSocket connection
 func (dg *DeepgramClient) Close() error {
-	if err := dg.Connection.WriteMessage(gws.CloseMessage, gws.FormatCloseMessage(gws.CloseNormalClosure, "Closing connection")); err != nil {
-		return err
-	}
-	dg.Cancel()
-	return dg.Connection.Close()
+	dg.Cancel()           // signal goroutines to stop
+    return dg.Connection.Close()  // immedately tear down socket
 }
