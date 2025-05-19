@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-
 	"github.com/mrsingh-rishi/voice-bot/types"
 )
 
@@ -12,13 +11,14 @@ import (
 type TranscriptionWorker struct {
 	ctx                     context.Context
 	cancel                  context.CancelFunc
-	TranscriptionOutputChannel chan<- string
+	TranscriptionOutputChannel chan<- types.TranscriptionResult
 	TranscriptionInputChannel  <-chan types.TranscriptionChannel
 	BroadcasterOutputChannel  chan<- bool
+	PrevCancel 				context.CancelFunc
 }
 
 
-func NewTranscriptionWorker(transcriptionOutputChannel chan<- string, transcriptionInputChannel <-chan types.TranscriptionChannel, broadcasterOutputChannel chan<- bool) (*TranscriptionWorker, error) {
+func NewTranscriptionWorker(transcriptionOutputChannel chan<- types.TranscriptionResult, transcriptionInputChannel <-chan types.TranscriptionChannel, broadcasterOutputChannel chan<- bool) (*TranscriptionWorker, error) {
 	// Params Validation
 	if transcriptionOutputChannel == nil {
 		return nil, fmt.Errorf("transcription channel is required")
@@ -52,10 +52,23 @@ func (tw *TranscriptionWorker) Start() {
 			case transcription := <-tw.TranscriptionInputChannel:
 				if transcription.Final {
 					log.Printf("Got Final Transcription: %s, Confidence: %f", transcription.Transcription, transcription.Confidence)
-					tw.TranscriptionOutputChannel <- transcription.Transcription
+					// ── 1) on ANY new transcript, cancel the previous context ──────────
+					if tw.PrevCancel != nil {
+						tw.PrevCancel()
+						tw.PrevCancel = nil
+					}
+					newCtx, cancel := context.WithCancel(tw.ctx)
+                	tw.PrevCancel = cancel
+					result := &types.TranscriptionResult{
+						Transcription: transcription.Transcription,
+						Confidence:    transcription.Confidence,
+						Final:         transcription.Final,
+						Ctx:        newCtx,
+					}
+					tw.TranscriptionOutputChannel <- *result
 				} else {
 					log.Printf("Got Partial Transcription: %s, Confidence: %f", transcription.Transcription, transcription.Confidence)
-					
+					// TODO: Implement re-egagement 
 				}
 			}
 		}
