@@ -236,6 +236,8 @@ func (c *Call) StartRecievingAudio(audioChannel chan []byte) {
 			log.Printf("Stream started: CallSid=%s, StreamSid=%s", ev.Start.CallSid, ev.Start.StreamSid)
 			c.SetStreamSid(ev.Start.StreamSid)
 			c.StartOutputWorker()
+			c.SendCallOpeningMessage()
+			log.Printf("Call opening message sent")
 
 		case "media":
 			chunk, err := base64.StdEncoding.DecodeString(ev.Media.Payload)
@@ -288,4 +290,8 @@ func (c *Call) Start() {
 
 	// Wait for done signal
 	<-c.done
+}
+
+func (c *Call) SendCallOpeningMessage(){
+	c.StreamingChannel <- "Hello, how can I help you today?"
 }
