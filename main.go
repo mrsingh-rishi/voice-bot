@@ -96,6 +96,10 @@ func main() {
 	// Fiber app
 	app := fiber.New()
 
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Welcome to the Twilio Voice Bot!")
+	})
+
 	// POST /call — kicks off outbound call & points TwiML at /twiml
 	app.Post("/call", func(c *fiber.Ctx) error {
 		var req callRequest
