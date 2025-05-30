@@ -20,12 +20,12 @@ jobs:
 
       - name: SSH into EC2 and Pull Latest Code
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "cd ~/projects/voice-bot && git pull"
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "source ~/.bashrc && cd ~/projects/voice-bot && git pull"
         
       - name: Build Go Binary on EC2
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "cd ~/projects/voice-bot && go build -o voice-bot main.go"
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "source ~/.bashrc && cd ~/projects/voice-bot && go build -o voice-bot main.go"
 
       - name: Restart Voice Bot Service
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "sudo systemctl restart voice-bot"
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_IP }} "source ~/.bashrc && sudo systemctl restart voice-bot"
