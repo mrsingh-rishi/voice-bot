@@ -40,6 +40,8 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, falling back to environment variables")
 	}
+	// PORT
+	port := os.Getenv("PORT")
 
 	// Twilio config
 	accountSid := os.Getenv("TWILIO_ACCOUNT_SID")
@@ -167,7 +169,10 @@ func main() {
 	}))
 
 	// Start server
-	addr := ":3000"
+	if port == "" {
+		port = "3000"
+	}
+	addr := "0.0.0.0:" + port
 	fmt.Printf("Fiber server listening on %s\n", addr)
 	log.Fatal(app.Listen(addr))
 }
