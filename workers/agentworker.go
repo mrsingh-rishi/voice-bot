@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/mrsingh-rishi/voice-bot/llm"
+	"github.com/mrsingh-rishi/voice-bot/types"
 )
 
 type AgentWorker struct {
@@ -13,11 +14,11 @@ type AgentWorker struct {
 	cancel                  context.CancelFunc
 	OpenAIClient            llm.OpenAIClient
 	AgentOutputChannel        chan<- string
-	AgentInputChannel       <-chan string
+	AgentInputChannel       <-chan types.TranscriptionResult
 	// TODO: Add other fields like ActionChannel, FillerResponse Generator, ActionWorker, etc.
 }
 
-func NewAgentWorker(apikey string, model string, streamingChannel chan<- string, transcriptionChannel <-chan string) (*AgentWorker, error) {
+func NewAgentWorker(apikey string, model string, streamingChannel chan<- string, transcriptionChannel <-chan types.TranscriptionResult) (*AgentWorker, error) {
 	// Params Validation
 	if apikey == "" {
 		return nil, fmt.Errorf("API key is required")
@@ -67,9 +68,9 @@ func (aw *AgentWorker) Start() {
 					// upstream closed → exit
 					return
 				}
-				log.Print("Received transcript: ", transcript)
+				log.Print("Received transcript: ", transcript.Transcription)
 				// Send the transcript to the OpenAI client for processing
-				aw.OpenAIClient.StreamResponse(transcript)
+				aw.OpenAIClient.StreamResponse(transcript.Ctx, transcript.Transcription)
 			}
 		}
 	}()

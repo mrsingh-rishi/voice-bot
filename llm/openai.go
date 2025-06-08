@@ -35,7 +35,7 @@ func NewOpenAIClient(apiKey string, systemInstructions string, model string, str
 
 // StreamResponse sends a user query to OpenAI and streams the response in real-time
 // 1️⃣ Top-level StreamResponse orchestrates setup, looping, and final flush
-func (c *OpenAIClient) StreamResponse(input string) {
+func (c *OpenAIClient) StreamResponse(ctx context.Context, input string) {
     log.Printf("Sending input to OpenAI: %s\n", input)
     c.Messages = append(c.Messages, openai.ChatCompletionMessage{
         Role:    "user",
@@ -47,7 +47,7 @@ func (c *OpenAIClient) StreamResponse(input string) {
         Stream:   true,
     }
 
-    stream, err := c.Client.CreateChatCompletionStream(context.Background(), req)
+    stream, err := c.Client.CreateChatCompletionStream(ctx, req)
     if err != nil {
         log.Printf("Failed to stream OpenAI response: %v\n", err)
         return
@@ -59,7 +59,7 @@ func (c *OpenAIClient) StreamResponse(input string) {
     buffer := &strings.Builder{}
 
     // 2️⃣ Read & process incoming chunks
-    c.readAndProcess(stream, sentenceRe, buffer)
+    c.readAndProcess(ctx, stream, sentenceRe, buffer)
 
     // 3️⃣ Send any trailing text
     c.flushRemaining(buffer)
@@ -67,11 +67,19 @@ func (c *OpenAIClient) StreamResponse(input string) {
 
 // 2️⃣ readAndProcess: receive each chunk, collate into sentences, and emit them
 func (c *OpenAIClient) readAndProcess(
+	ctx context.Context,
     stream *openai.ChatCompletionStream,
     sentenceRe *regexp.Regexp,
     buffer *strings.Builder,
 ) {
     for {
+		// 1) honor cancellation
+        select {
+        case <-ctx.Done():
+            log.Println("LLM stream cancelled")
+            return
+        default:
+        }
         resp, err := stream.Recv()
         if err != nil {
             if err.Error() != "EOF" {
