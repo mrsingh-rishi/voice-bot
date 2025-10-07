@@ -1,3 +1,7 @@
+// Package call holds the Call session orchestration. It wires the STT client,
+// workers (agent, agent response, filler response), output, and the WebSocket
+// transport (Twilio) together. The `Call` struct stores channels and references
+// used to pass data and control signals between components.
 package call
 
 import (
@@ -34,10 +38,23 @@ type Call struct {
 	OutputWorker         *output.TwilioOutput
 	StreamingChannel     chan string
 	OutputChannel        chan string
+	// TranscriptionChannel receives final transcription strings from Deepgram.
+	// This is the main input for the AgentWorker to process user utterances.
 	TranscriptionChannel chan string
-	DeepgramClient       *stt.DeepgramClient
-	AudioChannel         chan []byte
-	done                 chan struct{} // Signal channel for graceful shutdown
+	// TranscriptionControlChannel receives a duplicate of final transcriptions
+	// and is used by the transcription worker to decide whether the incoming
+	// transcription should interrupt current work (e.g., when the agent is
+	// currently responding). Keeping a separate control channel prevents races
+	// with the primary processing channel and allows special handling.
+	TranscriptionControlChannel chan string // receives transcriptions specifically for interruption handling
+	// store keys so we can recreate workers on interruption
+	OpenAIApiKey     string
+	ElevenLabsApiKey string
+	ElevenVoiceId    string
+	ElevenModelId    string
+	DeepgramClient   *stt.DeepgramClient
+	AudioChannel     chan []byte
+	done             chan struct{} // Signal channel for graceful shutdown
 }
 
 func NewCall(ws *websocket.Conn) (*Call, error) {
@@ -55,16 +72,29 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 	transcriptionChannel := make(chan string)
 	// fillerResponseInputChannel: DeepgramClient output -> FillerResponseWorker input
 	fillerResponseInputChannel := make(chan string)
+	// transcription control channel: DeepgramClient duplicate output -> TranscriptionWorker
+	// This channel is intentionally separate so the transcription worker can
+	// analyse utterances for interruption without affecting the main
+	// transcription processing pipeline.
+	transcriptionControlChannel := make(chan string)
 	// fillerResponseOutputChannel: FillerResponseWorker output (not used in this Call struct)
 	fillerResponseOutputChannel := make(chan string)
 	// outputChannel: AgentResponseWorker output -> OutputWorker input
+	// This channel transports base64 audio chunks and sentinel values to the
+	// Twilio output layer.
 	outputChannel := make(chan string)
 	// audioChannel: StartRecievingAudio output -> DeepgramClient input
+	// This channel carries raw audio frames (bytes) decoded from Twilio's
+	// base64 media payloads. DeepgramClient.SendAudio reads from this
+	// channel and writes binary frames to the Deepgram WebSocket.
 	audioChannel := make(chan []byte)
 	// done: signal channel for graceful shutdown
 	done := make(chan struct{})
 
-	deepgramClient, err1 := stt.NewDeepgramClient(deepgramApiKey, transcriptionChannel, fillerResponseInputChannel)
+	// Create Deepgram client; pass three channels so Deepgram can broadcast
+	// final transcriptions to (1) main transcription channel, (2) filler
+	// response input, and (3) transcription control worker (interruption logic).
+	deepgramClient, err1 := stt.NewDeepgramClient(deepgramApiKey, transcriptionChannel, fillerResponseInputChannel, transcriptionControlChannel)
 	if err1 != nil {
 		return nil, err1
 	}
@@ -85,18 +115,23 @@ func NewCall(ws *websocket.Conn) (*Call, error) {
 	log.Println("Filler response worker created")
 
 	return &Call{
-		streamSid:            "",
-		ws:                   ws,
-		AgentWorker:          agentWorker,
-		AgentResponseWorker:  agentResponseWorker,
-		FillerResponseWorker: fillerResponseWorker,
-		OutputWorker:         nil,
-		StreamingChannel:     streamingChannel,
-		OutputChannel:        outputChannel,
-		TranscriptionChannel: transcriptionChannel,
-		DeepgramClient:       deepgramClient,
-		AudioChannel:         audioChannel,
-		done:                 done,
+		streamSid:                   "",
+		ws:                          ws,
+		AgentWorker:                 agentWorker,
+		AgentResponseWorker:         agentResponseWorker,
+		FillerResponseWorker:        fillerResponseWorker,
+		OutputWorker:                nil,
+		StreamingChannel:            streamingChannel,
+		OutputChannel:               outputChannel,
+		TranscriptionChannel:        transcriptionChannel,
+		TranscriptionControlChannel: transcriptionControlChannel,
+		OpenAIApiKey:                openaiApiKey,
+		ElevenLabsApiKey:            elevenLabsApiKey,
+		ElevenVoiceId:               "cjVigY5qzO86Huf0OWal",
+		ElevenModelId:               "eleven_multilingual_v1",
+		DeepgramClient:              deepgramClient,
+		AudioChannel:                audioChannel,
+		done:                        done,
 	}, nil
 }
 
@@ -116,7 +151,7 @@ func (c *Call) CreateOutputWorker() error {
 	return nil
 }
 
-func (c *Call) StartOutputWorker(){
+func (c *Call) StartOutputWorker() {
 	c.OutputWorker.Start()
 }
 
@@ -276,6 +311,9 @@ func (c *Call) Start() {
 
 	c.FillerResponseWorker.Start()
 
+	// Start transcription worker which handles interruption logic
+	c.StartTranscriptionWorker()
+
 	// Start receiving audio in a separate goroutine
 	go func() {
 		c.StartRecievingAudio(c.AudioChannel)
@@ -292,6 +330,6 @@ func (c *Call) Start() {
 	<-c.done
 }
 
-func (c *Call) SendCallOpeningMessage(){
+func (c *Call) SendCallOpeningMessage() {
 	c.StreamingChannel <- "Hello, how can I help you today?"
 }

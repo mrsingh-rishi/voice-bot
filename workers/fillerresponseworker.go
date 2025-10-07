@@ -7,14 +7,17 @@ import (
 	"github.com/mrsingh-rishi/voice-bot/llm"
 )
 
+// FillerResponseWorker generates a single filler word given a spontaneous
+// utterance. It's used for heuristic UI or to produce quick filler responses.
+// It listens on FillerInputChannel and emits the chosen filler word to
+// FillerOutputChannel.
 type FillerResponseWorker struct {
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-	OpenAIClient            llm.OpenAIClient
-	FillerOutputChannel     chan<- string
-	FillerInputChannel      <-chan string
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	OpenAIClient        llm.OpenAIClient
+	FillerOutputChannel chan<- string
+	FillerInputChannel  <-chan string
 }
-
 
 func NewFillerResponseWorker(apikey string, model string, fillerOutputChannel chan<- string, fillerInputChannel <-chan string) (*FillerResponseWorker, error) {
 	// Params Validation
